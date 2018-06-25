@@ -14,18 +14,18 @@ var shimmer = require('./lib/shimmer')
 var Shim = require('./lib/shim/shim')
 var TransactionHandle = require('./lib/transaction/handle')
 
-var MODULE_TYPE = require('./lib/shim/constants').MODULE_TYPE
+const MODULE_TYPE = require('./lib/shim/constants').MODULE_TYPE
 
 /*
  *
  * CONSTANTS
  *
  */
-var RUM_STUB = "<script type='text/javascript'>window.NREUM||(NREUM={});" +
+const RUM_STUB = "<script type='text/javascript'>window.NREUM||(NREUM={});" +
                 "NREUM.info = %s; %s</script>"
 
 // these messages are used in the _gracefail() method below in getBrowserTimingHeader
-var RUM_ISSUES = [
+const RUM_ISSUES = [
   'NREUM: no browser monitoring headers generated; disabled',
   'NREUM: transaction missing or ignored while generating browser monitoring headers',
   'NREUM: config.browser_monitoring missing, something is probably wrong',
@@ -36,12 +36,12 @@ var RUM_ISSUES = [
   'NREUM: browser_monitoring disabled by browser_monitoring.loader config'
 ]
 
-// can't overwrite internal parameters or all heck will break loose
-var CUSTOM_BLACKLIST = [
+// Can't overwrite internal parameters or all heck will break loose.
+const CUSTOM_BLACKLIST = new Set([
   'nr_flatten_leading'
-]
+])
 
-var CUSTOM_EVENT_TYPE_REGEX = /^[a-zA-Z0-9:_ ]+$/
+const CUSTOM_EVENT_TYPE_REGEX = /^[a-zA-Z0-9:_ ]+$/
 
 /**
  * The exported New Relic API. This contains all of the functions meant to be
@@ -103,8 +103,8 @@ API.prototype.setTransactionName = function setTransactionName(name) {
  * - ignore: set the transaction that was active when
  *   `API#getTransaction` was called to be ignored.
  *
- * @returns {TransactionHandle} transaction The transaction object with the `end`
- *                               and `ignore` methods on it.
+ * @returns {TransactionHandle} The transaction object with the `end` and
+ *  `ignore` methods on it.
  */
 API.prototype.getTransaction = function getTransaction() {
   var metric = this.agent.metrics.getOrCreateMetric(
@@ -115,7 +115,7 @@ API.prototype.getTransaction = function getTransaction() {
   var transaction = this.agent.tracer.getTransaction()
   if (!transaction) {
     logger.debug("No transaction found when calling API#getTransaction")
-    return TransactionHandle.stub
+    return new TransactionHandle.Stub()
   }
 
   transaction.handledExternally = true
@@ -206,7 +206,7 @@ API.prototype.setControllerName = function setControllerName(name, action) {
 
 /**
  * Deprecated. Please use `addCustomAttribute` instead.
- * TODO: remove in v4
+ * TODO: remove in v5
  */
 API.prototype.addCustomParameter = util.deprecate(
   addCustomParameter, [
@@ -247,7 +247,7 @@ function addCustomParameter(key, value) {
     )
   }
 
-  if (CUSTOM_BLACKLIST.indexOf(key) !== -1) {
+  if (CUSTOM_BLACKLIST.has(key)) {
     return logger.warn('Not overwriting value of NR-only attribute %s.', key)
   }
 
@@ -297,7 +297,7 @@ API.prototype.addCustomAttribute = function addCustomAttribute(key, value) {
     )
   }
 
-  if (CUSTOM_BLACKLIST.indexOf(key) !== -1) {
+  if (CUSTOM_BLACKLIST.has(key)) {
     return logger.warn('Not overwriting value of NR-only attribute %s.', key)
   }
 
@@ -306,7 +306,7 @@ API.prototype.addCustomAttribute = function addCustomAttribute(key, value) {
 
 /**
  * Deprecated. Please use `addCustomAttributes` instead.
- * TODO: remove in v4
+ * TODO: remove in v5
  */
 API.prototype.addCustomParameters = util.deprecate(
   addCustomParameters, [
@@ -629,13 +629,23 @@ API.prototype.getBrowserTimingHeader = function getBrowserTimingHeader() {
   return out
 }
 
+API.prototype.createTracer = util.deprecate(
+  createTracer, [
+    'API#createTracer is being deprecated!',
+    'Please use API#startSegment for segment creation.'
+  ].join(' ')
+)
+
 /**
  * This creates a new tracer with the passed in name. It then wraps the
  * callback and binds it to the current transaction and segment so any further
  * custom instrumentation as well as auto instrumentation will also be able to
  * find the current transaction and segment.
+ *
+ * @memberof API#
+ * @deprecated use {@link API#startSegment} instead
  */
-API.prototype.createTracer = function createTracer(name, callback) {
+function createTracer(name, callback) {
   var metric = this.agent.metrics.getOrCreateMetric(
     NAMES.SUPPORTABILITY.API + '/createTracer'
   )
@@ -687,6 +697,70 @@ API.prototype.createTracer = function createTracer(name, callback) {
   return arity.fixArity(callback, tracer.bindFunction(callback, segment, true))
 }
 
+/**
+ * Wraps the given handler in a segment which may optionally be turned into a
+ * metric.
+ *
+ * @example
+ *  newrelic.startSegment('mySegment', false, function handler() {
+ *    // The returned promise here will signify the end of the segment.
+ *    return myAsyncTask().then(myNextTask)
+ *  })
+ *
+ * @param {string} name
+ *  The name to give the new segment. This will also be the name of the metric.
+ *
+ * @param {bool} record
+ *  Indicates if the segment should be recorded as a metric. Metrics will show
+ *  up on the transaction breakdown table and server breakdown graph. Segments
+ *  just show up in transaction traces.
+ *
+ * @param {function(cb) -> ?Promise} handler
+ *  The function to track as a segment.
+ *
+ * @param {function} [callback]
+ *  An optional callback for the handler. This will indicate the end of the
+ *  timing if provided.
+ *
+ * @return {*} Returns the result of calling `handler`.
+ */
+API.prototype.startSegment = function startSegment(name, record, handler, callback) {
+  this.agent.metrics.getOrCreateMetric(
+    NAMES.SUPPORTABILITY.API + '/startSegment'
+  ).incrementCallCount()
+
+  // Check that we have usable arguments.
+  if (!name || typeof handler !== 'function') {
+    logger.warn('Name and handler function are both required for startSegment')
+    if (typeof handler === 'function') {
+      return handler(callback)
+    }
+    return
+  }
+  if (callback && typeof callback !== 'function') {
+    logger.warn('If using callback, it must be a function')
+    return handler(callback)
+  }
+
+  // Are we inside a transaction?
+  if (!this.shim.getActiveSegment()) {
+    logger.debug('startSegment(%j) called outside of a transaction, not recording.', name)
+    return handler(callback)
+  }
+
+  // Create the segment and call the handler.
+  var wrappedHandler = this.shim.record(handler, function handlerNamer(shim) {
+    return {
+      name: name,
+      recorder: record ? customRecorder : null,
+      callback: callback ? shim.FIRST : null,
+      promise: !callback
+    }
+  })
+
+  return wrappedHandler(callback)
+}
+
 API.prototype.createWebTransaction = util.deprecate(
   createWebTransaction, [
     'API#createWebTransaction is being deprecated!',
@@ -713,7 +787,7 @@ API.prototype.createWebTransaction = util.deprecate(
                                 name and not iclude any variable parameters.
  * @param {Function}  handle    Function that represents the transaction work.
  *
- * @memberOf API#
+ * @memberof API#
  *
  * @deprecated since version 2.0
  */
@@ -952,7 +1026,7 @@ function startBackgroundTransaction(name, group, handle) {
       tx.id
     )
 
-    tx.finalizeName(txName)
+    tx._partialName = txName
     tx.baseSegment = tracer.createSegment(name, recordBackground)
     tx.baseSegment.partialName = group
     tx.baseSegment.start()
@@ -1068,7 +1142,7 @@ function createBackgroundTransaction(name, group, handle) {
       tx.id
     )
 
-    tx.finalizeName(txName)
+    tx._partialName = txName
     tx.baseSegment = tracer.createSegment(name, recordBackground)
     tx.baseSegment.partialName = group
     tx.baseSegment.start()
@@ -1141,7 +1215,7 @@ API.prototype.recordMetric = function recordMetric(name, value) {
     return
   }
 
-  // TODO: In Agent v3 prefix custom metrics with `Custom/`.
+  // TODO: In Agent v5 prefix custom metrics with `Custom/`.
   var metric = this.agent.metrics.getOrCreateMetric(name)
 
   if (typeof value === 'number') {
@@ -1295,7 +1369,9 @@ API.prototype.recordCustomEvent = function recordCustomEvent(eventType, attribut
     timestamp: Date.now()
   }
 
-  this.agent.customEvents.add([instrinics, attributes])
+  var tx = this.agent.getTransaction()
+  var priority = tx && tx.priority || Math.random()
+  this.agent.customEvents.add([instrinics, attributes], priority)
 }
 
 /**
@@ -1494,10 +1570,9 @@ API.prototype.shutdown = function shutdown(options, cb) {
 
   if (options && options.collectPendingData && agent._state !== 'started') {
     if (typeof options.timeout === 'number') {
-      var shutdownTimeout = setTimeout(function shutdownTimeout() {
+      setTimeout(function shutdownTimeout() {
         agent.stop(callback)
-      }, options.timeout)
-      shutdownTimeout.unref()
+      }, options.timeout).unref()
     } else if (options.timeout) {
       logger.warn(
         'options.timeout should be of type "number". Got %s',

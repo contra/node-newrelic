@@ -11,7 +11,7 @@ var semver = require('semver')
 
 function generate(method, runID) {
   var fragment = '/agent_listener/invoke_raw_method?' +
-    'marshal_format=json&protocol_version=15&' +
+    'marshal_format=json&protocol_version=16&' +
     'license_key=license%20key%20here&method=' + method
 
   if (runID) fragment += '&run_id=' + runID
@@ -43,7 +43,7 @@ describe('RemoteMethod', function() {
 
     it('should JSON-encode the given payload', function(done) {
       method.serialize({foo: 'bar'}, function(err, encoded) {
-        expect(err).to.not.exist()
+        expect(err).to.not.exist
         expect(encoded).to.equal('{"foo":"bar"}')
         done()
       })
@@ -53,7 +53,7 @@ describe('RemoteMethod', function() {
       var obj = {foo: 'bar'}
       obj.obj = obj
       method.serialize(obj, function(err, encoded) {
-        expect(err).to.not.exist()
+        expect(err).to.not.exist
         expect(encoded).to.equal('{"foo":"bar","obj":"[Circular ~]"}')
         done()
       })
@@ -65,9 +65,9 @@ describe('RemoteMethod', function() {
           throw new Error('fake serialization error')
         }}, function(err, encoded) {
           expect(err)
-            .to.exist()
+            .to.exist
             .and.have.property('message', 'fake serialization error')
-          expect(encoded).to.not.exist()
+          expect(encoded).to.not.exist
           done()
         })
       })
@@ -544,8 +544,8 @@ describe('RemoteMethod', function() {
       parsed = reconstitute(method._path())
     })
 
-    it('should say that it supports protocol 15', function() {
-      expect(parsed.query.protocol_version).equal('15')
+    it('should say that it supports protocol 16', function() {
+      expect(parsed.query.protocol_version).equal('16')
     })
 
     it('should tell the collector it is sending JSON', function() {

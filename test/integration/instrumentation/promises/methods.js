@@ -1,14 +1,12 @@
 'use strict'
 
 var helper = require('../../../lib/agent_helper')
-var semver = require('semver')
 var testTransactionState = require('./transaction-state')
 
 
 var runMultiple = testTransactionState.runMultiple
 var tasks = []
 var interval = null
-var runBindCast = semver.satisfies(process.version, '>0.12')
 
 
 module.exports = function(t, library, loadLibrary) {
@@ -170,7 +168,7 @@ module.exports = function(t, library, loadLibrary) {
       })
     })
 
-    t.test('casting', {skip: !runBindCast}, function(t) {
+    t.test('casting', function(t) {
       testPromiseClassCastMethod(t, 4, function(t, Promise, name, ctx) {
         return Promise.bind(ctx, name).then(function(value) {
           t.equal(this, ctx, 'should have expected `this` value')
@@ -189,48 +187,46 @@ module.exports = function(t, library, loadLibrary) {
   testResolveBehavior('cast')
   ptap.skip('Promise.config')
 
-  // TODO: Enable this test after deprecating Node 0.10 and 0.12.
-  ptap.skip('Promise.coroutine')
-  // ptap.test('Promise.coroutine', function(t) {
-  //   t.plan(2)
-  //
-  //   t.test('context', function(t) {
-  //     testPromiseContext(t, function(Promise, name) {
-  //       return Promise.coroutine(function*(name) {
-  //         for (var i = 0; i < 10; ++i) {
-  //           yield Promise.delay(5)
-  //         }
-  //         return name
-  //       })(name)
-  //     })
-  //   })
-  //
-  //   t.test('usage', function(t) {
-  //     testPromiseClassMethod(t, 4, function(Promise, name) {
-  //       var count = 0
-  //
-  //       t.doesNotThrow(function() {
-  //         Promise.coroutine.addYieldHandler(function(value) {
-  //           if (value === name) {
-  //             t.pass('should call yield handler')
-  //             return Promise.resolve(value + ' yielded')
-  //           }
-  //         })
-  //       }, 'should be able to add yield handler')
-  //
-  //       return Promise.coroutine(function*(name) {
-  //         for (var i = 0; i < 10; ++i) {
-  //           yield Promise.delay(5)
-  //           ++count
-  //         }
-  //         return yield name
-  //       })(name).then(function(result) {
-  //         t.equal(count, 10, 'should step through whole coroutine')
-  //         t.equal(result, name + ' yielded', 'should pass through resolve value')
-  //       })
-  //     })
-  //   })
-  // })
+  ptap.test('Promise.coroutine', function(t) {
+    t.plan(2)
+
+    t.test('context', function(t) {
+      testPromiseContext(t, function(Promise, name) {
+        return Promise.coroutine(function*(_name) {
+          for (var i = 0; i < 10; ++i) {
+            yield Promise.delay(5)
+          }
+          return _name
+        })(name)
+      })
+    })
+
+    t.test('usage', function(t) {
+      testPromiseClassMethod(t, 4, function(Promise, name) {
+        var count = 0
+
+        t.doesNotThrow(function() {
+          Promise.coroutine.addYieldHandler(function(value) {
+            if (value === name) {
+              t.pass('should call yield handler')
+              return Promise.resolve(value + ' yielded')
+            }
+          })
+        }, 'should be able to add yield handler')
+
+        return Promise.coroutine(function*(_name) {
+          for (var i = 0; i < 10; ++i) {
+            yield Promise.delay(5)
+            ++count
+          }
+          return yield _name
+        })(name).then(function(result) {
+          t.equal(count, 10, 'should step through whole coroutine')
+          t.equal(result, name + ' yielded', 'should pass through resolve value')
+        })
+      })
+    })
+  })
 
   ptap.skip('Promise.defer')
 
@@ -497,11 +493,12 @@ module.exports = function(t, library, loadLibrary) {
     })
 
     t.test('usage', function(t) {
-      testPromiseClassMethod(t, 3, function methodTest(Promise, name) {
+      testPromiseClassMethod(t, 4, function methodTest(Promise, name) {
         var fn = Promise.promisify(function(cb) {
           cb(new Error('Promise.promisify test error'))
         })
 
+        // Test error handling.
         return fn().then(function() {
           t.fail(name + 'should not go into resolve after throwing')
         }, function(err) {
@@ -513,6 +510,7 @@ module.exports = function(t, library, loadLibrary) {
             )
           }
         }).then(function() {
+          // Test success handling.
           var foo = {what: 'Promise.promisify test object'}
           var fn2 = Promise.promisify(function(cb) {
             cb(null, foo)
@@ -521,6 +519,14 @@ module.exports = function(t, library, loadLibrary) {
           return fn2().then(function(obj) {
             t.equal(obj, foo, name + 'should also work on success')
           })
+        }).then(() => {
+          // Test property copying.
+          const unwrapped = (cb) => cb()
+          const property = {name}
+          unwrapped.property = property
+
+          const wrapped = Promise.promisify(unwrapped)
+          t.equal(wrapped.property, property, 'should have copied properties')
         })
       })
     })
@@ -528,10 +534,10 @@ module.exports = function(t, library, loadLibrary) {
 
   // XXX: Promise.promisifyAll _does_ cause state loss due to the construction
   //      of an internal promise that doesn't use the normal executor. However,
-  //      instrumenting this method is treacherous as we will have to walk mimic
-  //      the library's own property-finding techniques. In bluebird's case
-  //      this involves walking the prototype chain and collecting the name of
-  //      every property on every prototype.
+  //      instrumenting this method is treacherous as we will have to mimic the
+  //      library's own property-finding techniques. In bluebird's case this
+  //      involves walking the prototype chain and collecting the name of every
+  //      property on every prototype.
   ptap.skip('Promise.promisifyAll')
 
   ptap.test('Promise.props', function(t) {
@@ -732,7 +738,7 @@ module.exports = function(t, library, loadLibrary) {
       })
     })
 
-    t.test('casting', {skip: !runBindCast}, function(t) {
+    t.test('casting', function(t) {
       testPromiseInstanceCastMethod(t, 2, function(t, Promise, p, name, value) {
         return p.bind(value).then(function(val) {
           t.equal(this, value, 'should have correct context')

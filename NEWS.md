@@ -1,3 +1,223 @@
+### 4.2.0 (2018-06-19):
+
+* Refactored harvest cycle into separate class.
+
+  This refactoring eases managing harvested data and re-merging unharvested values
+  on failure.
+
+* Added seen/sent/dropped supportability metrics for all event collections.
+
+* Updated `WebFrameworkShim` to handle arrays of routes when wrapping middleware
+  mounters.
+
+  Previously, a transaction that hit a shared middleware (eg, `app.use(['/one',
+  '/two'], ...)`) would always be tagged with `<unknown>` in its name, due to the
+  agent not interpreting arrays of paths. Now transaction names will include all
+  paths for a shared middleware, comma-delimited, followed by the current route
+  (`'WebTransaction/Expressjs/GET//one,/two/one'`).
+
+* Added an option for using the `finally` method on promises for instrumentation.
+
+  The promise instrumentation would use `Promise#finally` if available. This change
+  is in response to Node v10 promises calling `then` inside their `finally` method,
+  which caused infinite recursion in the agent's promise instrumentation.
+
+* No longer download gcc on test suites that do not require it.
+
+### 4.1.5 (2018-06-11):
+
+* Make `require()` statements explicitly reference `package.json` as a `.json` file.
+
+  This solves a problem when requiring/importing newrelic from a Typescript file.
+  Thanks @guyellis for the submission!
+
+* Check if `process.mainModule.filename` exists before using in missing config file
+  check.
+
+  When the agent is preloaded with Node's `--require` flag, `mainModule` is not yet
+  defined when the agent checks for a config file, resulting in a `TypeError` in
+  the event that no config file exists. Defaulting to the file path being executed
+  in `process.argv` ensures that the app will not crash when preloaded without a
+  config file.
+
+* Updated dev dependency `tap` to v12.0.1.
+
+* Fixed identification of errors with express.
+
+  Previously the call `next('router')` was considered an error. This is actually
+  valid usage of express and will no longer generate an error.
+
+* Removed `debug.internal_metrics` configuration.
+
+  This legacy debug configuration was never used since trace-level logging provides
+  everything this did and more.
+
+* Upgraded optional dependency `@newrelic/native-metrics` to v3.
+
+  With this update comes pre-built binaries for Node 5 and 7. GC metrics are also
+  now aggregated in C++ until the agent is ready to harvest them instead of hopping
+  into JS for each event.
+
+* Added additional checks to `uninstrumented` ensuring that files with names
+  matching instrumented modules do not result in a false uninstrumented status.
+
+  For example, some users load config/env info before the agent. In that case, a
+  file responsible for exporting DB config information (`config/redis.js`), may
+  result in a false `uninstrumented` status, because the agent would interpret
+  `redis.js` as the module itself.
+
+### 4.1.4 (2018-06-04):
+
+* Transaction stubs are now created properly in `api#getTransaction`
+
+  During a refactor to use classes for the `TransactionHandle` class, the
+  `TransactionHandleStub` was converted into a class. This change in interface
+  wasn't reflected in the use around the agent and would pass back the class
+  instead of an instance.
+
+  Big shoutout to Roy Miloh (@roymiloh) for submitting the fix to this!
+
+* Upgraded dev dependency `chai` to version 4.
+
+### 4.1.3 (2018-05-29):
+
+* Fixed metric merging when using `debug.internal_metrics`.
+
+  The debug metrics cache would cause timestamps for harvested metrics to get stuck
+  at agent startup. This will no longer happen, and the debug cache is reset each
+  harvest.
+
+* Modularlized configuration constants to improve readability.
+
+### 4.1.2 (2018-05-22):
+
+* Fixed access to properties on promisified methods.
+
+  Thanks to John Morrison (@jrgm) for pointing this out and providing a
+  reproduction.
+
+* Updated use of `fs.unlink` without a callback to `fs.unlinkSync`.
+
+  As of Node v10, the callback is [no longer optional](https://nodejs.org/dist/latest-v10.x/docs/api/fs.html#fs_fs_unlink_path_callback), which was causing a false
+  test failure.
+
+### 4.1.1 (2018-05-14):
+
+* Logger no longer tries to create very large log messages.
+
+  When a message is created that would be too large to log, a process warning is
+  emitted.
+
+* Optimized `unhandledRejection` reporting when using `async_hooks`.
+
+* The agent no longer resizes the metric timeslice start time to be the earliest
+  start time of the transactions that finish during the timeslice.
+
+* Replaced all uses of `util._extend` with `Object.assign`.
+
+* Background transactions created may now be named through `API#setTransactionName`.
+
+  Previously, the agent didn't respect the transaction naming precedence for
+  background transactions. Background transaction naming behavior is now in line
+  with web transaction behavior.
+
+* Completed TODOs regarding the Node 0.10 and 0.12 deprecation.
+
+* Added PriorityQueue serialization benchmarks.
+
+* Added check for a route prefix when wrapping Hapi route handlers.
+
+  Previously, route prefixes specified via plugin options weren't being included
+  in transaction names. Now, if the agent finds a route prefix associated with a
+  given realm, it is prepended to the route path in the transaction name.
+
+* The agent will now respect event count limits when merging data from a failed send.
+
+  Previously, when merging data into an event pool the agent wouldn't maintain the
+  size limit of the reservoir.
+
+### 4.1.0 (2018-04-23):
+
+* Updated logic around wrapping route handlers when `config` object is present.
+
+  Before, the agent would only attempt to wrap `config.handler` when any `config`
+  object was present, without defaulting to the root `handler` if it didn't exist.
+
+* Added `PriorityQueue` class for collecting events.
+
+  This replaces the `Reservoir` class for event sampling. Using priority sampling
+  allows the agent to maintain randomness across a given time period while
+  improving the chances that events will be coordinated across Transaction, Error,
+  and Custom event pools.
+
+* The agent will now allow external instrumentation modules to fail in a safe way.
+
+  Previously, the agent would stop running if an externally loaded instrumentation
+  failed for any reason. Due to the way external instrumentations can be updated
+  independently, the agent should allow them to fail and carry on after logging a
+  warning.
+
+* Added the `strip_exception_messages.enabled` config option.
+
+  The agent can now be configured to redact error messages on collected errors.
+
+* Added the `attributes.include_enabled` config option.
+
+  The agent can now be configured to disallow attribute include patterns to be
+  specified.
+
+### 4.0.0 (2018-04-12):
+
+* BREAKING: Updated the version of `https-proxy-agent` to v2.x - Dropped support
+  for v0.10 and v0.12 of node.
+
+  The version of `https-proxy-agent` used in the agent has a known security
+  issue you can read about here: https://snyk.io/vuln/npm:https-proxy-agent:20180402
+  In order to resolve this issue, the dependency had to be updated to at least
+  v2.2.0, which only supported node versions >=4.  The update to this dependency
+  forces the incompatibility of the agent with versions 0.10 and 0.12 of Node.
+
+  In order to use use the Node.js agent, please upgrade node to version >=4, or you can
+  continue to use the agent on Node versions 0.10 and 0.12 by pinning the agent
+  to v3.
+
+  You can read more about the issue here: https://docs.newrelic.com/docs/using-new-relic/new-relic-security/security-bulletins/security-bulletin-nr18-08
+
+### 3.3.1 (2018-04-10):
+
+* Added a type check to attribute validation, restricting values to primitive types
+  (but not `undefined`).
+
+  Previously the agent was only enforcing byte limits on string values, resulting
+  in overly large arrays being collected. This brings the agent in line with other
+  language agents.
+
+* The `DatastoreShim` will now respect specified `after` handlers.
+
+  Previously on methods like `DatastoreShim#recordQuery` the `after` handler would
+  be dropped. The property is now correctly propagated to the underlying
+  `Shim#record` call.
+
+* The agent will now check that a specified parent segment is part of an active
+  segment before running a method under instrumentation.
+
+  Previously the agent would unconditionally run a method under a specified
+  parent. The shim expects the parent to exist and be active, and will throw
+  errors in the case where the parent belongs to an inactive transaction.
+
+### 3.3.0 (2018-03-27):
+
+* Added `newrelic.startSegment()` which replaces `newrelic.createTracer()`.
+
+  This new API method allows you to create custom segments using either callbacks
+  or promises.
+
+* Fixed bug in `pre` route config option in Hapi instrumentation.
+
+  Only applies to Hapi v16 and below. The `pre` handler wrapping was not properly
+  returning in cases when the element was a string referring to a registered server
+  method, and as a result these elements would be replaced with `undefined`.
+
 ### 3.2.0 (2018-03-14):
 
 * Added [`@newrelic/koa`](https://github.com/newrelic/node-newrelic-koa) as a

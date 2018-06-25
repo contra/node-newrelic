@@ -12,7 +12,6 @@ var configurator = require('../../../lib/config')
 var Agent = require('../../../lib/agent')
 var Transaction = require('../../../lib/transaction')
 var clearAWSCache = require('../../../lib/utilization/aws-info').clearCache
-var extend = require('util')._extend
 
 
 /*
@@ -131,113 +130,52 @@ describe('the New Relic agent', function() {
       should.exist(agent.config.debug)
     })
 
-    describe('with debugging configured', function() {
-      it('internal instrumentation is disabled by default', function() {
-        var debug = agent.config.debug
-        expect(debug.internal_metrics).equal(false)
+    describe('when sampling distributed traces', function() {
+      var fakeTransaction
+      beforeEach(function() {
+        fakeTransaction = {
+          priority: 0,
+          sampled: null
+        }
       })
 
-      it('internal instrumentation can be configured', function() {
-        var config = configurator.initialize({debug: {internal_metrics: true}})
-        var debugged = new Agent(config)
-
-        var debug = debugged.config.debug
-        expect(debug.internal_metrics).equal(true)
+      it('should count the number of traces sampled', function() {
+        expect(agent.transactionsSampled).to.equal(0)
+        expect(agent.shouldSampleTransaction(fakeTransaction)).to.be.true
+        expect(agent.transactionsSampled).to.equal(1)
       })
 
-      describe('with internal instrumentation enabled', function() {
-        var debugged
+      it('should not sample transactions with priorities lower than the min', function() {
+        expect(agent.transactionsSampled).to.equal(0)
+        agent.minSampledPriority = 0.5
+        expect(agent.shouldSampleTransaction(fakeTransaction)).to.be.false
+        expect(agent.transactionsSampled).to.equal(0)
+        expect(agent.shouldSampleTransaction({priority: 1})).to.be.true
+        expect(agent.transactionsSampled).to.equal(1)
+      })
 
-        beforeEach(function() {
-          var config = configurator.initialize({
-            license_key: 'license key here',
-            run_id: RUN_ID,
-            debug: {internal_metrics: true}
-          })
-          debugged = new Agent(config)
-        })
+      it('should adjust the min priority when throughput increases', function() {
+        agent.transactionCreatedInHarvest = 2 * agent.sampledTarget
+        agent.adjustTransactionStats()
+        expect(agent.minSampledPriority).to.equal(0.5)
+      })
 
-        it('should have an object for tracking internal metrics', function() {
-          should.exist(debugged.config.debug.supportability)
-        })
+      it('should backoff on sampling after reaching the sampled target', function() {
+        agent.transactionCreatedInHarvest = 10 * agent.sampledTarget
+        agent.adjustTransactionStats()
+        var expectedMSP = [
+            0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9,
+            0.9512462826139941, 0.9642301587871667, 0.9735792049702137,
+            0.9805646189006507, 0.9859434773568351, 0.9901897153501046,
+            0.9936126144884015, 0.9964212290549166, 0.998761182830125
+        ]
 
-        it('should set apdexT on the supportability metrics on connect', function(done) {
-          var config = configurator.initialize({
-            license_key: 'license key here',
-            debug: {internal_metrics: true}
-          })
-          debugged = new Agent(config)
-
-          expect(debugged.config.debug.supportability.apdexT).equal(0.1)
-
-          var redirect =
-            nock(URL)
-              .post(helper.generateCollectorPath('preconnect'))
-              .reply(200, {return_value: 'collector.newrelic.com'})
-          var connect =
-            nock(URL)
-              .post(helper.generateCollectorPath('connect'))
-              .reply(200, {return_value: {agent_run_id: RUN_ID, apdex_t: 0.5}})
-          var settings =
-            nock(URL)
-              .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-              .reply(200, {return_value: []})
-          var metrics =
-            nock(URL)
-              .post(helper.generateCollectorPath('metric_data', RUN_ID))
-              .reply(200, {return_value: []})
-          var shutdown =
-            nock(URL)
-              .post(helper.generateCollectorPath('shutdown', RUN_ID))
-              .reply(200, {return_value: null})
-
-          debugged.start(function cb_start() {
-            expect(debugged.config.debug.supportability.apdexT).equal(0.5)
-
-            redirect.done()
-            connect.done()
-            debugged.stop(function cb_stop() {
-              settings.done()
-              awsRedirect.done()
-              metrics.done()
-              shutdown.done()
-              done()
-            })
-          })
-        })
-
-        it('should find an internal metric for transaction processed', function(done) {
-          debugged.once('transactionFinished', function() {
-            var supportability = debugged.config.debug.supportability
-            var metric = supportability.getMetric('Supportability/Transaction/Count')
-
-
-            should.exist(metric)
-            expect(metric.callCount).equal(1)
-
-            done()
-          })
-
-          var transaction = new Transaction(debugged)
-          transaction.end()
-        })
-
-        it('should merge supportability metrics into sent payload', function(done) {
-          debugged.collector.metricData = function(payload, callback) {
-            var metrics = payload[3]
-            expect(metrics.getMetric('Supportability/Transaction/Count').callCount)
-              .equal(1)
-
-            callback()
-          }
-
-          var transaction = new Transaction(debugged)
-          transaction.end(function cb_transactionEnd() {
-            debugged._sendMetrics(function cb__sendMetrics() {
-              done()
-            })
-          })
-        })
+        // Change this to maxSampled if we change the way the back off works.
+        for (var i = 0; i < 2 * agent.sampledTarget; ++i) {
+          var diff = agent.minSampledPriority - expectedMSP[i]
+          expect(diff).to.be.lessThan(0.001)
+          agent.incrementTransactionsSampled()
+        }
       })
     })
 
@@ -415,10 +353,9 @@ describe('the New Relic agent', function() {
       })
 
       it('should harvest at connect when metrics are already there', function(done) {
-        var metrics =
-          nock(URL)
-            .post(helper.generateCollectorPath('metric_data', RUN_ID))
-            .reply(200, {return_value: []})
+        var metrics = nock(URL)
+          .post(helper.generateCollectorPath('metric_data', RUN_ID))
+          .reply(200, {return_value: []})
 
         agent.collector.connect = function(callback) {
           callback(null, {agent_run_id: RUN_ID})
@@ -439,24 +376,26 @@ describe('the New Relic agent', function() {
       it('should not blow up when harvest cycle runs', function(done) {
         var origInterval = global.setInterval
         global.setInterval = function(callback) {
-          return extend({unref: function() {}}, setImmediate(callback))
+          return Object.assign({unref: function() {}}, setImmediate(callback))
         }
 
         // manually harvesting
         agent.config.no_immediate_harvest = true
 
-        var redirect =
-          nock(URL)
-            .post(helper.generateCollectorPath('preconnect'))
-            .reply(200, {return_value: 'collector.newrelic.com'})
-        var connect =
-          nock(URL)
-            .post(helper.generateCollectorPath('connect'))
-            .reply(200, {return_value: {agent_run_id: RUN_ID}})
-        var settings =
-          nock(URL)
-            .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-            .reply(200, {return_value: []})
+        var redirect = nock(URL)
+          .post(helper.generateCollectorPath('preconnect'))
+          .reply(200, {
+            return_value: {
+              redirect_host: 'collector.newrelic.com',
+              security_policies: {}
+            }
+          })
+        var connect = nock(URL)
+          .post(helper.generateCollectorPath('connect'))
+          .reply(200, {return_value: {agent_run_id: RUN_ID}})
+        var settings = nock(URL)
+          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
+          .reply(200, {return_value: []})
 
         agent.start(function cb_start() {
           setTimeout(function() {
@@ -474,26 +413,27 @@ describe('the New Relic agent', function() {
       it('should not blow up when harvest cycle errors', function(done) {
         var origInterval = global.setInterval
         global.setInterval = function(callback) {
-          return extend({unref: function() {}}, setImmediate(callback))
+          return Object.assign({unref: function() {}}, setImmediate(callback))
         }
 
-        var redirect =
-          nock(URL)
-            .post(helper.generateCollectorPath('preconnect'))
-            .reply(200, {return_value: 'collector.newrelic.com'})
-        var connect =
-          nock(URL)
-            .post(helper.generateCollectorPath('connect'))
-            .reply(200, {return_value: {agent_run_id: RUN_ID}})
-        var settings =
-          nock(URL)
-            .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-            .reply(200, {return_value: []})
-        var metrics =
-          nock(URL)
-            .post(helper.generateCollectorPath('metric_data', RUN_ID))
-            .times(2)
-            .reply(503)
+        var redirect = nock(URL)
+          .post(helper.generateCollectorPath('preconnect'))
+          .reply(200, {
+            return_value: {
+              redirect_host: 'collector.newrelic.com',
+              security_policies: {}
+            }
+          })
+        var connect = nock(URL)
+          .post(helper.generateCollectorPath('connect'))
+          .reply(200, {return_value: {agent_run_id: RUN_ID}})
+        var settings = nock(URL)
+          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
+          .reply(200, {return_value: []})
+        var metrics = nock(URL)
+          .post(helper.generateCollectorPath('metric_data', RUN_ID))
+          .times(2)
+          .reply(503)
 
         agent.start(function cb_start() {
           setTimeout(function() {
@@ -566,10 +506,9 @@ describe('the New Relic agent', function() {
       describe('if connected', function() {
         it('should call shutdown', function(done) {
           agent.config.run_id = RUN_ID
-          var shutdown =
-            nock(URL)
-              .post(helper.generateCollectorPath('shutdown', RUN_ID))
-              .reply(200, {return_value: null})
+          var shutdown = nock(URL)
+            .post(helper.generateCollectorPath('shutdown', RUN_ID))
+            .reply(200, {return_value: null})
 
           agent.stop(function cb_stop(error) {
             should.not.exist(error)
@@ -621,20 +560,25 @@ describe('the New Relic agent', function() {
         }
 
         var redirect = nock(URL)
-                         .post(helper.generateCollectorPath('preconnect'))
-                         .reply(200, {return_value: 'collector.newrelic.com'})
+          .post(helper.generateCollectorPath('preconnect'))
+          .reply(200, {
+            return_value: {
+              redirect_host: 'collector.newrelic.com',
+              security_policies: {}
+            }
+          })
         var handshake = nock(URL)
-                          .post(helper.generateCollectorPath('connect'))
-                          .reply(200, {return_value: config})
+            .post(helper.generateCollectorPath('connect'))
+            .reply(200, {return_value: config})
         var settings = nock(URL)
-                          .post(helper.generateCollectorPath('agent_settings', 404))
-                          .reply(200, {return_value: config})
+            .post(helper.generateCollectorPath('agent_settings', 404))
+            .reply(200, {return_value: config})
         var metrics = nock(URL)
-                          .post(helper.generateCollectorPath('metric_data', 404))
-                          .reply(200, {return_value: []})
+            .post(helper.generateCollectorPath('metric_data', 404))
+            .reply(200, {return_value: []})
         var shutdown = nock(URL)
-                          .post(helper.generateCollectorPath('shutdown', 404))
-                          .reply(200, {return_value: null})
+            .post(helper.generateCollectorPath('shutdown', 404))
+            .reply(200, {return_value: null})
 
         agent.start(function cb_start(error) {
           should.not.exist(error)
@@ -686,7 +630,7 @@ describe('the New Relic agent', function() {
         }
 
         agent.once('transactionFinished', function() {
-          expect(agent.traces.trace).not.exist()
+          expect(agent.traces.trace).not.exist
           expect(agent.traces.syntheticsTraces).length(1)
           var trace = agent.traces.syntheticsTraces[0]
           expect(trace.getDurationInMillis(), 'same trace just passed in').equal(2100)
@@ -707,75 +651,6 @@ describe('the New Relic agent', function() {
         agent._apdexTChange(APDEX_T)
 
         expect(agent.metrics.apdexT).equal(APDEX_T)
-      })
-    })
-
-    describe('when parsing metric mappings', function() {
-      var NAME     = 'Custom/Test/events'
-      var SCOPE    = 'TEST'
-      var METRICID = 17
-
-
-      beforeEach(function() {
-        agent.config.run_id = RUN_ID
-      })
-
-      it('should not throw if no new rules are received', function(done) {
-        var metrics =
-          nock(URL)
-            .post(helper.generateCollectorPath('metric_data', RUN_ID))
-            .reply(200, {return_value: null})
-
-        // need metrics or agent won't make a call against the collector
-        agent.metrics.measureMilliseconds('Test/bogus', null, 1)
-
-        agent.harvest(function cb_harvest(error) {
-          should.not.exist(error)
-
-          metrics.done()
-          done()
-        })
-      })
-
-      it('should not throw if new rules are received', function(done) {
-        var rules = [[{name: 'Test/RenameMe1'}, 1001],
-                     [{name: 'Test/RenameMe2', scope: 'TEST'}, 1002]]
-
-        var metrics =
-          nock(URL)
-            .post(helper.generateCollectorPath('metric_data', RUN_ID))
-            .reply(200, {return_value: rules})
-
-        // need metrics or agent won't make a call against the collector
-        agent.metrics.measureMilliseconds('Test/bogus', null, 1)
-
-        agent.harvest(function cb_harvest(error) {
-          should.not.exist(error)
-
-          metrics.done()
-          done()
-        })
-      })
-
-      it('should add them to the existing mappings', function(done) {
-        var rules = [[{name: NAME, scope: SCOPE}, METRICID]]
-
-        var metrics =
-          nock(URL)
-            .post(helper.generateCollectorPath('metric_data', RUN_ID))
-            .reply(200, {return_value: rules})
-
-        // need metrics or agent won't make a call against the collector
-        agent.metrics.measureMilliseconds('Test/bogus', null, 1)
-
-        agent.config.run_id = RUN_ID
-        agent.harvest(function cb_harvest(error) {
-          should.not.exist(error)
-          expect(agent.mapper.map(NAME, SCOPE)).equal(17)
-
-          metrics.done()
-          done()
-        })
       })
     })
 
@@ -879,641 +754,6 @@ describe('the New Relic agent', function() {
 
           done()
         })
-      })
-    })
-  })
-
-  describe('when harvesting', function() {
-    var agent
-
-    beforeEach(function() {
-      var config = configurator.initialize({
-        run_id: RUN_ID,
-        license_key: 'license key here'
-      })
-      agent = new Agent(config)
-
-      // turn off error events, so that does not interfere with this test
-      agent.config.error_collector.capture_events = false
-    })
-
-    it('harvest requires a callback', function() {
-      expect(function() { agent.harvest() }).throws('callback required!')
-    })
-
-    it('the last reported time is congruent with reality', function() {
-      expect(agent.metrics.started).closeTo(Date.now(), 1000)
-    })
-
-    it('sends transactions to the new error handler after harvest', function(done) {
-      agent.metrics.started = 1337
-
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-
-      // need metrics or agent won't make a call against the collector
-      agent.metrics.measureMilliseconds('Test/bogus', null, 1)
-
-      agent.harvest(function cb_harvest() {
-        metricData.done()
-
-        agent.errors = {
-          onTransactionFinished: function(t) {
-            expect(t).equal(transaction)
-            done()
-          }
-        }
-
-        var transaction = new Transaction(agent)
-        transaction.statusCode = 200
-        transaction.end()
-      })
-    })
-
-    it('reports the error count', function(done) {
-      agent.errors.add(null, new TypeError('no method last on undefined'))
-      agent.errors.add(null, new Error('application code error'))
-      agent.errors.add(null, new RangeError('stack depth exceeded'))
-
-      agent.collector.metricData = function(payload) {
-        var metrics = payload[3]
-        var metric  = metrics.getMetric('Errors/all')
-
-
-        should.exist(metric)
-        expect(metric.callCount).equal(3)
-
-        done()
-      }
-
-      agent.harvest(function nop() {})
-    })
-
-    it('reports web transactions error count', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.url = '/some/path'
-      expect(transaction.isWeb()).to.be.true
-
-      agent.errors.add(transaction, new TypeError('no method last on undefined'))
-      agent.errors.add(transaction, new Error('application code error'))
-      agent.errors.add(transaction, new RangeError('stack depth exceeded'))
-
-      agent.collector.metricData = function(payload) {
-        var metrics = payload[3]
-        var metric  = metrics.getMetric('Errors/allWeb')
-
-        should.exist(metric)
-        expect(metric.callCount).equal(3)
-
-        done()
-      }
-
-      transaction.end(harvest)
-
-      function harvest() {
-        agent.harvest(function nop() {})
-      }
-    })
-
-    it('reports background transactions error count', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.type = Transaction.TYPES.BG
-      expect(transaction.isWeb()).to.be.false()
-
-      agent.errors.add(transaction, new TypeError('no method last on undefined'))
-      agent.errors.add(transaction, new Error('application code error'))
-      agent.errors.add(transaction, new RangeError('stack depth exceeded'))
-
-      agent.collector.metricData = function(payload) {
-        var metrics = payload[3]
-        var metric  = metrics.getMetric('Errors/allOther')
-
-        expect(metric).to.exist().and.have.property('callCount', 3)
-
-        done()
-      }
-
-      transaction.end(harvest)
-
-      function harvest() {
-        agent.harvest(function nop() {})
-      }
-    })
-
-    it('resets error count after harvest', function(done) {
-      // turn off error events, so that does not interfere with this test
-      agent.config.error_collector.capture_events = false
-
-      agent.errors.add(null, new TypeError('no method last on undefined'))
-      agent.errors.add(null, new Error('application code error'))
-      agent.errors.add(null, new RangeError('stack depth exceeded'))
-
-      agent.collector.metricData = function(payload, cb) {
-        // These tests do not clean up after themselves, at least call the cb
-        // that harvest doesn't hang.
-        cb()
-      }
-
-      var old_ed = agent.collector.errorData
-      agent.collector.errorData = function(errors, cb) {
-        cb()
-      }
-
-      agent.harvest(function cb_harvest() {
-        expect(agent.errors.errorCount).equal(0)
-        agent.collector.errorData = old_ed
-        done()
-      })
-    })
-
-    it('resets error count after harvest when error collector is off', function(done) {
-      // turn off error events, so that does not interfere with this test
-      agent.config.error_collector.capture_events = false
-
-      agent.errors.add(null, new TypeError('no method last on undefined'))
-      agent.errors.add(null, new Error('application code error'))
-      agent.errors.add(null, new RangeError('stack depth exceeded'))
-
-      // Defaults to true, but maybe it'll change in the future.
-      var old_config = agent.config.error_collector.enabled
-      agent.config.error_collector.enabled = false
-
-      agent.collector.metricData = function(payload, cb) {
-        // These tests do not clean up after themselves, at least call the cb
-        // that harvest doesn't hang.
-        cb()
-      }
-
-      agent.harvest(function cb_harvest() {
-        expect(agent.errors.errorCount).equal(0)
-        agent.config.error_collector.enabled = old_config
-        done()
-      })
-    })
-
-    it('bails out early when sending metrics fails', function(done) {
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(503)
-
-      agent.errors.add(null, new Error('application code error'))
-
-      agent.harvest(function cb_harvest(error) {
-        should.exist(error)
-        expect(error.message).equal('No body found in response to metric_data.')
-
-        metricData.done()
-        done()
-      })
-    })
-
-    it('bails out early when sending errors fails', function(done) {
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(503)
-
-      agent.errors.add(null, new Error('application code error'))
-
-      agent.harvest(function cb_harvest(error) {
-        should.exist(error)
-        expect(error.message).equal('No body found in response to error_data.')
-
-        metricData.done()
-        errorData.done()
-        done()
-      })
-    })
-
-    it('does not send errors when error tracer disabled', function(done) {
-      var settings =
-        nock(URL)
-          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-          .reply(200, {return_value: []})
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-
-      agent.errors.add(null, new TypeError('no method last on undefined'))
-      agent.errors.add(null, new Error('application code error'))
-      agent.errors.add(null, new RangeError('stack depth exceeded'))
-
-      // do this here so error traces get collected but not sent
-      agent.config.onConnect({'error_collector.enabled': false})
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-
-        // Wait for agent_settings command to be sent after event emitted from onConnect
-        setTimeout(function() {
-          settings.done()
-          done()
-        }, 15)
-      })
-    })
-
-    it('does not send errors when server disables collect_errors', function(done) {
-      // turn off error events, so that does not interfere with this test
-      agent.config.error_collector.capture_events = false
-
-      var settings =
-        nock(URL)
-          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-          .reply(200, {return_value: []})
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-
-      agent.errors.add(null, new TypeError('no method last on undefined'))
-      agent.errors.add(null, new Error('application code error'))
-      agent.errors.add(null, new RangeError('stack depth exceeded'))
-
-      // do this here so error traces get collected but not sent
-      agent.config.onConnect({collect_errors: false})
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-
-        // Wait for agent_settings command to be sent after event emitted from onConnect
-        setTimeout(function() {
-          settings.done()
-          done()
-        }, 15)
-      })
-    })
-
-    it('does not send queries when slow_sql is disabled', function(done) {
-      var settings =
-        nock(URL)
-          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-          .reply(200, {return_value: []})
-
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-
-      agent.config.slow_sql.enabled = true
-      agent.config.transaction_tracer.record_sql = 'raw'
-
-      agent.queries.addQuery(
-        new FakeSegment('test', 700),
-        'mysql',
-        'select * from foo',
-        new Error().stack
-      )
-
-      expect(Object.keys(agent.queries.samples).length).equal(1)
-      agent.config.onConnect({collect_errors: false})
-      // do this here so error traces get collected but not sent
-      agent.config.slow_sql.enabled = false
-
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-
-        // Wait for agent_settings command to be sent after event emitted from onConnect
-        setTimeout(function() {
-          settings.done()
-          done()
-        }, 15)
-      })
-
-      function FakeSegment(name, duration) {
-        this.name = name
-        this.parameters = {}
-        this.getDurationInMillis = function getDurationInMillis() {
-          return duration
-        }
-      }
-    })
-
-    it('sends query trace when there is a trace to send', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      transaction.trace.setDurationInMillis(4001)
-      transaction.end()
-
-      agent.config.slow_sql.enabled = true
-      agent.config.transaction_tracer.record_sql = 'raw'
-
-      agent.queries.addQuery(
-        transaction.trace.root,
-        'mysql',
-        'select * from foo',
-        new Error().stack
-      )
-
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var eventData =
-        nock(URL)
-          .post(helper.generateCollectorPath('analytic_event_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var transactionSampleData =
-        nock(URL)
-          .post(helper.generateCollectorPath('transaction_sample_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var queryData =
-        nock(URL)
-          .post(helper.generateCollectorPath('sql_trace_data', RUN_ID))
-          .reply(200, {return_value: null})
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-        eventData.done()
-        errorData.done()
-        queryData.done()
-        transactionSampleData.done()
-        done()
-      })
-    })
-
-    it('merges queries when send fails', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      transaction.trace.setDurationInMillis(4001)
-      transaction.end()
-
-      agent.config.slow_sql.enabled = true
-      agent.config.transaction_tracer.record_sql = 'raw'
-
-      agent.queries.addQuery(
-        transaction.trace.root,
-        'mysql',
-        'select * from foo',
-        new Error().stack
-      )
-
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var eventData =
-        nock(URL)
-          .post(helper.generateCollectorPath('analytic_event_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var transactionSampleData =
-        nock(URL)
-          .post(helper.generateCollectorPath('transaction_sample_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var queryData =
-        nock(URL)
-          .post(helper.generateCollectorPath('sql_trace_data', RUN_ID))
-          .reply(500, {return_value: null})
-
-
-      var sendQueries = agent._sendQueries
-
-      agent._sendQueries = function mockSendQueries() {
-        expect(Object.keys(agent.queries.samples).length).equal(1)
-        sendQueries.apply(this, arguments)
-        expect(Object.keys(agent.queries.samples).length).equal(0)
-      }
-
-      agent.harvest(function cb_harvest(error) {
-        expect(Object.keys(agent.queries.samples).length).equal(1)
-        expect(error.statusCode).equal(500)
-
-        metricData.done()
-        eventData.done()
-        errorData.done()
-        queryData.done()
-        transactionSampleData.done()
-        done()
-      })
-    })
-
-    it('does not send transaction traces when slow traces disabled', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      agent.errors.add(transaction, new TypeError('no method last on undefined'))
-      agent.errors.add(transaction, new Error('application code error'))
-      agent.errors.add(transaction, new RangeError('stack depth exceeded'))
-      transaction.end()
-
-      var settings =
-        nock(URL)
-          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-          .reply(200, {return_value: []})
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var eventData =
-        nock(URL)
-          .post(helper.generateCollectorPath('analytic_event_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(200, {return_value: null})
-
-      // do this here so slow trace gets collected but not sent
-      agent.config.onConnect({'transaction_tracer.enabled': false})
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-        eventData.done()
-        errorData.done()
-
-        // Wait for agent_settings command to be sent after event emitted from onConnect
-        setTimeout(function() {
-          settings.done()
-          done()
-        }, 15)
-      })
-    })
-
-    it('does not send transaction traces when collect_traces disabled', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      agent.errors.add(transaction, new TypeError('no method last on undefined'))
-      agent.errors.add(transaction, new Error('application code error'))
-      agent.errors.add(transaction, new RangeError('stack depth exceeded'))
-      transaction.end()
-
-      var settings =
-        nock(URL)
-          .post(helper.generateCollectorPath('agent_settings', RUN_ID))
-          .reply(200, {return_value: []})
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var eventData =
-        nock(URL)
-          .post(helper.generateCollectorPath('analytic_event_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(200, {return_value: null})
-
-      // set this here so slow trace gets collected but not sent
-      agent.config.onConnect({collect_traces: false})
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-        eventData.done()
-        errorData.done()
-
-        // Wait for agent_settings command to be sent after event emitted from onConnect
-        setTimeout(function() {
-          settings.done()
-          done()
-        }, 15)
-      })
-    })
-
-    it('sends transaction trace when there is a trace to send', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      agent.errors.add(transaction, new TypeError('no method last on undefined'))
-      agent.errors.add(transaction, new Error('application code error'))
-      agent.errors.add(transaction, new RangeError('stack depth exceeded'))
-      transaction.trace.setDurationInMillis(4001)
-      transaction.end()
-
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var eventData =
-        nock(URL)
-          .post(helper.generateCollectorPath('analytic_event_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var transactionSampleData =
-        nock(URL)
-          .post(helper.generateCollectorPath('transaction_sample_data', RUN_ID))
-          .reply(200, {return_value: null})
-
-      agent.harvest(function cb_harvest(error) {
-        should.not.exist(error)
-
-        metricData.done()
-        eventData.done()
-        errorData.done()
-        transactionSampleData.done()
-        done()
-      })
-    })
-
-    it('passes through errror when sending trace fails', function(done) {
-      var transaction = new Transaction(agent)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      agent.errors.add(transaction, new Error('application code error'))
-      transaction.trace.setDurationInMillis(4001)
-      transaction.end()
-
-      var metricData =
-        nock(URL)
-          .post(helper.generateCollectorPath('metric_data', RUN_ID))
-          .reply(200, {return_value: []})
-      var errorData =
-        nock(URL)
-          .post(helper.generateCollectorPath('error_data', RUN_ID))
-          .reply(200, {return_value: null})
-      var transactionSampleData =
-        nock(URL)
-          .post(helper.generateCollectorPath('transaction_sample_data', RUN_ID))
-          .reply(503)
-
-      agent.harvest(function cb_harvest(error) {
-        expect(error.message)
-          .equal('No body found in response to transaction_sample_data.')
-
-        metricData.done()
-        errorData.done()
-        transactionSampleData.done()
-        done()
-      })
-    })
-  })
-
-
-  describe('when performing harvest operations without a connection', function() {
-    var agent
-
-    beforeEach(function() {
-      var config = configurator.initialize({
-        license_key: 'license key here'
-      })
-      agent = new Agent(config)
-    })
-
-    it('should bail informatively when sending metric data', function(done) {
-      var transaction = new Transaction(agent)
-      agent.errors.add(transaction, new Error('application code error'))
-      transaction.trace.setDurationInMillis(4001)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      transaction.end()
-
-      agent._sendMetrics(function cb__sendMetrics(error) {
-        expect(error.message).equal('not connected to New Relic (metrics will be held)')
-        done()
-      })
-    })
-
-    it('should bail informatively when sending error data', function(done) {
-      var transaction = new Transaction(agent)
-      agent.errors.add(transaction, new Error('application code error'))
-      transaction.trace.setDurationInMillis(4001)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      transaction.end()
-
-      agent._sendErrors(function cb__sendErrors(error) {
-        expect(error.message).equal('not connected to New Relic (errors will be held)')
-        done()
-      })
-    })
-
-    it('should bail informatively when sending transaction trace', function(done) {
-      var transaction = new Transaction(agent)
-      agent.errors.add(transaction, new Error('application code error'))
-      transaction.trace.setDurationInMillis(4001)
-      transaction.finalizeNameFromUri('/test/path/31337', 501)
-      transaction.end()
-
-      agent._sendTrace(function cb__sendTrace(error) {
-        expect(error.message)
-          .equal('not connected to New Relic (slow trace data will be held)')
-        done()
       })
     })
   })

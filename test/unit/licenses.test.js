@@ -5,17 +5,10 @@ var expect = require('chai').expect
 var fs = require('fs')
 var licenses = require('./licenses')
 var path = require('path')
-var pkg = require('../../package')
-var semver = require('semver')
+var pkg = require('../../package.json')
 
 
 var MODULE_DIR = path.resolve(__dirname, '../../node_modules')
-
-// This package doesn't support Node <0.12 so it wont be found.
-if (semver.satisfies(process.version, '<0.12')) {
-  delete licenses['@newrelic/native-metrics']
-  delete pkg.optionalDependencies['@newrelic/native-metrics']
-}
 
 
 describe('Agent licenses', function() {
@@ -41,7 +34,7 @@ describe('Agent licenses', function() {
         }
       ], cb)
     }, function(err, depLicensesArray) {
-      expect(err).to.not.exist()
+      expect(err).to.not.exist
       var depLicenses = depLicensesArray.reduce(function(obj, dep) {
         obj[dep[0]] = dep[1]
         return obj

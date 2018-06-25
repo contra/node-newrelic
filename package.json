@@ -1,6 +1,6 @@
 {
   "name": "newrelic",
-  "version": "3.2.0",
+  "version": "4.2.0",
   "author": "New Relic Node.js agent team <nodejs@newrelic.com>",
   "licenses": [
     {
@@ -96,7 +96,7 @@
   ],
   "homepage": "http://github.com/newrelic/node-newrelic",
   "engines": {
-    "node": ">=0.10.0",
+    "node": ">=4.0.0",
     "npm": ">=2.0.0"
   },
   "directories": {
@@ -112,15 +112,16 @@
   },
   "dependencies": {
     "@newrelic/koa": "^1.0.0",
+    "@tyriar/fibonacci-heap": "^2.0.7",
     "async": "^2.1.4",
     "concat-stream": "^1.5.0",
-    "https-proxy-agent": "^0.3.6",
+    "https-proxy-agent": "^2.2.1",
     "json-stringify-safe": "^5.0.0",
     "readable-stream": "^2.1.4",
     "semver": "^5.3.0"
   },
   "optionalDependencies": {
-    "@newrelic/native-metrics": "^2.1.0"
+    "@newrelic/native-metrics": "^3.0.0"
   },
   "devDependencies": {
     "@newrelic/test-utilities": "^1.2.0",
@@ -128,11 +129,11 @@
     "architect": "*",
     "benchmark": "^2.1.4",
     "bluebird": "^3.4.7",
-    "chai": "^1.10.0",
+    "chai": "^4.1.2",
     "connect": "*",
     "cover": "*",
     "ejs": "0.8.5",
-    "eslint": "^4.12.1",
+    "eslint": "^4.19.1",
     "express": "*",
     "generic-pool": "*",
     "glob": "^7.1.2",
@@ -141,6 +142,7 @@
     "jsdoc": "^3.4.0",
     "lodash": "^4.17.5",
     "memcached": ">=0.2.8",
+    "methods": "^1.1.2",
     "minami": "^1.1.1",
     "mkdirp": "*",
     "mocha": "^3.5.3",
@@ -158,7 +160,7 @@
     "sequelize": "*",
     "should": "*",
     "sinon": "^3.3.0",
-    "tap": "^10.7.3",
+    "tap": "^12.0.1",
     "temp": "^0.8.1",
     "through": "^2.3.6",
     "when": "*"

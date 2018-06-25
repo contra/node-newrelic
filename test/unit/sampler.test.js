@@ -1,22 +1,19 @@
 'use strict'
 
-var chai = require('chai')
-var expect = chai.expect
-var configurator = require('../../lib/config')
-var sampler = require('../../lib/sampler')
 var Agent = require('../../lib/agent')
-var semver = require('semver')
+var configurator = require('../../lib/config')
+var expect = require('chai').expect
+var sampler = require('../../lib/sampler')
 
 
 var NAMES = require('../../lib/metrics/names')
 
 
-describe("environmental sampler", function() {
-  var agent
+describe('environmental sampler', function() {
+  var agent = null
   var numCpus = require('os').cpus().length
   var oldCpuUsage = process.cpuUsage
   var oldUptime = process.uptime
-  var it_native = semver.satisfies(process.version, '<0.12') ? xit : it
 
   beforeEach(function() {
     agent = new Agent(configurator.initialize())
@@ -36,47 +33,54 @@ describe("environmental sampler", function() {
     process.uptime = oldUptime
   })
 
-  it_native("should have the native-metrics package available", function() {
+  it('should have the native-metrics package available', function() {
     expect(function() {
       require('@newrelic/native-metrics')
     }).to.not.throw()
   })
 
-  it_native("should still gather native metrics when bound and unbound", function(done) {
+  it('should still gather native metrics when bound and unbound', function(done) {
     sampler.start(agent)
     sampler.stop()
     sampler.start(agent)
 
-    sampler.nativeMetrics.emit('gc', {
-      type: 'TestGC',
-      typeId: 1337,
-      duration: 50 * 1e9 // 50 seconds in nanoseconds
-    })
-    var pause = agent.metrics.getOrCreateMetric(NAMES.GC.PAUSE_TIME)
-    var type = agent.metrics.getOrCreateMetric(NAMES.GC.PREFIX + 'TestGC')
-
-    // These are "at least" because a real GC might happen during the test.
-    expect(pause).property('callCount').to.be.at.least(1)
-    expect(pause).property('total').to.be.at.least(50)
-
-    // These tests can be exact because we're using a fake GC type.
-    expect(type).to.have.property('callCount', 1)
-    expect(type).to.have.property('total', 50)
-
+    // Clear up the current state of the metrics.
+    sampler.nativeMetrics.getGCMetrics()
     sampler.nativeMetrics.getLoopMetrics()
+
     spinLoop(function runLoop() {
       sampler.sampleLoop(agent, sampler.nativeMetrics)()
+      sampler.sampleGc(agent, sampler.nativeMetrics)()
 
-      var stats = agent.metrics.getOrCreateMetric(NAMES.LOOP.USAGE)
-      expect(stats.callCount).to.be.above(1)
-      expect(stats.max).to.be.above(0)
-      expect(stats.min).to.be.at.most(stats.max)
-      expect(stats.total).to.be.at.least(stats.max)
+      const loop = agent.metrics.getOrCreateMetric(NAMES.LOOP.USAGE)
+      expect(loop.callCount).to.be.above(1)
+      expect(loop.max).to.be.above(0)
+      expect(loop.min).to.be.at.most(loop.max)
+      expect(loop.total).to.be.at.least(loop.max)
+
+      // Find at least one typed GC metric.
+      const type = [
+        'Scavenge',
+        'MarkSweepCompact',
+        'IncrementalMarking',
+        'ProcessWeakCallbacks',
+        'All'
+      ].find((t) => agent.metrics.getOrCreateMetric(NAMES.GC.PREFIX + t).callCount)
+      expect(type).to.exist
+
+      const gc = agent.metrics.getOrCreateMetric(NAMES.GC.PREFIX + type)
+      expect(gc).property('callCount').to.be.at.least(1)
+      expect(gc).property('total').to.be.at.least(0.001) // At least 1 ms of GC
+
+      const pause = agent.metrics.getOrCreateMetric(NAMES.GC.PAUSE_TIME)
+      expect(pause).property('callCount').to.be.at.least(gc.callCount)
+      expect(pause).property('total').to.be.at.least(gc.total)
+
       done()
     })
   })
 
-  it_native("should gather loop metrics", function(done) {
+  it('should gather loop metrics', function(done) {
     sampler.start(agent)
     sampler.nativeMetrics.getLoopMetrics()
     spinLoop(function runLoop() {
@@ -91,21 +95,21 @@ describe("environmental sampler", function() {
     })
   })
 
-  it("should depend on Agent to provide the current metrics summary", function() {
+  it('should depend on Agent to provide the current metrics summary', function() {
     expect(function() { sampler.start(agent) }).to.not.throw()
     expect(function() { sampler.stop(agent) }).to.not.throw()
   })
 
-  it("should default to a state of stopped", function() {
+  it('should default to a state of stopped', function() {
     expect(sampler.state).equal('stopped')
   })
 
-  it("should say it's running after start", function() {
+  it('should say it is running after start', function() {
     sampler.start(agent)
     expect(sampler.state).equal('running')
   })
 
-  it("should gather CPU user utilization metric", function() {
+  it('should gather CPU user utilization metric', function() {
     sampler.sampleCpu(agent)()
 
     var stats = agent.metrics.getOrCreateMetric(NAMES.CPU.USER_UTILIZATION)
@@ -113,7 +117,7 @@ describe("environmental sampler", function() {
     expect(stats.total).equal(1)
   })
 
-  it("should gather CPU system utilization metric", function() {
+  it('should gather CPU system utilization metric', function() {
     sampler.sampleCpu(agent)()
 
     var stats = agent.metrics.getOrCreateMetric(NAMES.CPU.SYSTEM_UTILIZATION)
@@ -121,7 +125,7 @@ describe("environmental sampler", function() {
     expect(stats.total).equal(1)
   })
 
-  it("should gather CPU user time metric", function() {
+  it('should gather CPU user time metric', function() {
     sampler.sampleCpu(agent)()
 
     var stats = agent.metrics.getOrCreateMetric(NAMES.CPU.USER_TIME)
@@ -129,7 +133,7 @@ describe("environmental sampler", function() {
     expect(stats.total).equal(numCpus)
   })
 
-  it("should gather CPU sytem time metric", function() {
+  it('should gather CPU sytem time metric', function() {
     sampler.sampleCpu(agent)()
 
     var stats = agent.metrics.getOrCreateMetric(NAMES.CPU.SYSTEM_TIME)
@@ -137,32 +141,44 @@ describe("environmental sampler", function() {
     expect(stats.total).equal(numCpus)
   })
 
-  it_native('should gather GC metrics', function() {
+  it('should gather GC metrics', function(done) {
     sampler.start(agent)
-    sampler.nativeMetrics.emit('gc', {
-      type: 'TestGC',
-      typeId: 1337,
-      duration: 50 * 1e9 // 50 seconds in nanoseconds
+
+    // Clear up the current state of the metrics.
+    sampler.nativeMetrics.getGCMetrics()
+
+    spinLoop(function runLoop() {
+      sampler.sampleGc(agent, sampler.nativeMetrics)()
+
+      // Find at least one typed GC metric.
+      const type = [
+        'Scavenge',
+        'MarkSweepCompact',
+        'IncrementalMarking',
+        'ProcessWeakCallbacks',
+        'All'
+      ].find((t) => agent.metrics.getOrCreateMetric(NAMES.GC.PREFIX + t).callCount)
+      expect(type).to.exist
+
+      const gc = agent.metrics.getOrCreateMetric(NAMES.GC.PREFIX + type)
+      expect(gc).property('callCount').to.be.at.least(1)
+      expect(gc).property('total').to.be.at.least(0.001) // At least 1 ms of GC
+
+      const pause = agent.metrics.getOrCreateMetric(NAMES.GC.PAUSE_TIME)
+      expect(pause).property('callCount').to.be.at.least(gc.callCount)
+      expect(pause).property('total').to.be.at.least(gc.total)
+
+      done()
     })
-    var pause = agent.metrics.getOrCreateMetric(NAMES.GC.PAUSE_TIME)
-    var type = agent.metrics.getOrCreateMetric(NAMES.GC.PREFIX + 'TestGC')
-
-    // These are "at least" because a real GC might happen during the test.
-    expect(pause).property('callCount').to.be.at.least(1)
-    expect(pause).property('total').to.be.at.least(50)
-
-    // These tests can be exact because we're using a fake GC type.
-    expect(type).to.have.property('callCount', 1)
-    expect(type).to.have.property('total', 50)
   })
 
-  it_native('should not gather GC metrics if the feature flag is off', function() {
+  it('should not gather GC metrics if the feature flag is off', function() {
     agent.config.feature_flag.native_metrics = false
     sampler.start(agent)
     expect(sampler.nativeMetrics).to.be.null
   })
 
-  it("should catch if process.cpuUsage throws an error", function() {
+  it('should catch if process.cpuUsage throws an error', function() {
     process.cpuUsage = function() {
       throw new Error('ohhhhhh boyyyyyy')
     }
@@ -172,18 +188,18 @@ describe("environmental sampler", function() {
     expect(stats.callCount).equal(0)
   })
 
-  it("should collect all specified memory statistics", function() {
+  it('should collect all specified memory statistics', function() {
     sampler.sampleMemory(agent)()
 
     Object.keys(NAMES.MEMORY).forEach(function testStat(memoryStat) {
       var metricName = NAMES.MEMORY[memoryStat]
       var stats = agent.metrics.getOrCreateMetric(metricName)
-      expect(stats.callCount).equal(1)
-      expect(stats.max).above(1) // maybe someday this test will fail
+      expect(stats.callCount, `${metricName} callCount`).to.equal(1)
+      expect(stats.max, `${metricName} max`).to.be.above(1)
     })
   })
 
-  it("should catch if process.memoryUsage throws an error", function() {
+  it('should catch if process.memoryUsage throws an error', function() {
     var oldProcessMem = process.memoryUsage
     process.memoryUsage = function() {
       throw new Error('your computer is on fire')
@@ -195,7 +211,7 @@ describe("environmental sampler", function() {
     process.memoryUsage = oldProcessMem
   })
 
-  it("should have some rough idea of how deep the event queue is", function(done) {
+  it('should have some rough idea of how deep the event queue is', function(done) {
     sampler.checkEvents(agent)()
 
     /* sampler.checkEvents works by creating a timer and using
@@ -225,19 +241,23 @@ describe("environmental sampler", function() {
 })
 
 function spinLoop(cb) {
-  var DELAY = 5
-  var COUNT = 5
-  var spins = 0
+  const DELAY = 5
+  const COUNT = 20
+  let spins = 0
 
   timeout()
   function timeout() {
     setTimeout(function() {
-      for (var i = 0; i < 1000000; ++i);
+      let trash = []
+      for (let i = 0; i < 100000; ++i) {
+        trash.push({i: i})
+      }
+      trash = null
 
       if (++spins < COUNT) {
         timeout()
       } else {
-        cb()
+        setImmediate(cb)
       }
     }, DELAY)
   }

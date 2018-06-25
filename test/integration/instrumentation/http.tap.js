@@ -206,12 +206,10 @@ test('built-in http instrumentation should not swallow errors', function(t) {
   }
 
   function makeRequest() {
-    // 0.10 agents don't time out
     var options = {
-      host  : 'localhost',
-      port  : 1337,
-      path  : '/',
-      agent : false
+      host: 'localhost',
+      port: 1337,
+      path: '/'
     }
 
     http.get(options, function(res) {
@@ -312,6 +310,7 @@ test("built-in http instrumentation making outbound requests", function(t) {
   })
 })
 
+// TODO: Remove this test once Node <7 is deprecated.
 test(
   "built-in http instrumentation making outbound requests obsoletely",
   {skip: !http.createClient},
@@ -412,30 +411,30 @@ test("built-in http instrumentation should not crash for requests that are in pr
     count++
 
     if (count === 1) {
-      setImmediate(function() {
-        t.ok(true, 'request #1 was received')
+      setTimeout(function() {
+        t.pass('request #1 was received')
         res.end()
 
         closing = true
         server.close()
-      })
+      }, 5)
     } else {
-      setImmediate(function() {
-        t.ok(true, 'request #2 was received')
+      setTimeout(function() {
+        t.pass('request #2 was received')
         t.ok(closing, 'server should be closing when request #2 is handled')
         res.end()
-      })
+      }, 10)
     }
   })
 
   server.listen(0, function() {
     // make two quick requests
     makeRequest(function() {
-      t.ok(true, 'request #1 got response')
+      t.pass('request #1 got response')
     })
 
     makeRequest(function() {
-      t.ok(true, 'request #2 got response')
+      t.pass('request #2 got response')
     })
   })
 

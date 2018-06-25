@@ -12,7 +12,7 @@ var logger = require('./lib/logger')
 var psemver = require('./lib/util/process-version')
 
 
-var agentVersion = require('./package').version
+var agentVersion = require('./package.json').version
 logger.info(
   "Using New Relic for Node.js. Agent version: %s; Node version: %s.",
   agentVersion, process.version
@@ -42,10 +42,10 @@ function initialize() {
       preAgentTime
     )
 
-    // TODO: Update this check when Node v0.10 is deprecated.
-    if (psemver.satisfies('<0.10.0')) {
+    // TODO: Update this check when Node v4 is deprecated.
+    if (psemver.satisfies('<4.0.0')) {
       message = "New Relic for Node.js requires a version of Node equal to or\n" +
-                "greater than 0.10.0. Not starting!"
+                "greater than 4.0.0. Not starting!"
 
       logger.error(message)
       throw new Error(message)
@@ -90,11 +90,11 @@ function initialize() {
   // NOTE: Metrics are recorded in seconds, so divide the value by 1000.
   if (agent) {
     var initDuration = (Date.now() - agentStart) / 1000
-    agent.recordSupportability('Application/Opening/Duration', preAgentTime)
-    agent.recordSupportability('Application/Initialization/Duration', initDuration)
+    agent.recordSupportability('Nodejs/Application/Opening/Duration', preAgentTime)
+    agent.recordSupportability('Nodejs/Application/Initialization/Duration', initDuration)
     agent.once('started', function timeAgentStart() {
       agent.recordSupportability(
-        'Application/Registration/Duration',
+        'Nodejs/Application/Registration/Duration',
         (Date.now() - agentStart) / 1000
       )
     })
@@ -132,6 +132,10 @@ function createAgent(config) {
   shimmer.patchModule(agent)
   shimmer.bootstrapInstrumentation(agent)
 
+  // Check for already loaded modules and warn about them.
+  var uninstrumented = require('./lib/uninstrumented')
+  uninstrumented.check(shimmer.registeredInstrumentations)
+
   agent.start(function cb_start(error) {
     if (!error) {
       return logger.debug("New Relic for Node.js is connected to New Relic.")
@@ -150,11 +154,10 @@ function createAgent(config) {
 }
 
 function addStartupSupportabilities(agent) {
-  // TODO: After deprecating Node 0.10 and 0.12, simplify this regex.
   // TODO: As new versions come out, make sure to update Angler metrics.
-  var nodeMajor = /^v?((?:0\.)?\d+)/.exec(process.version)
+  var nodeMajor = /^v?(\d+)/.exec(process.version)
   agent.recordSupportability(
-    'Version/' + ((nodeMajor && nodeMajor[1]) || 'unknown')
+    'Nodejs/Version/' + ((nodeMajor && nodeMajor[1]) || 'unknown')
   )
 
   var configFlags = Object.keys(agent.config.feature_flag)
@@ -164,7 +167,7 @@ function addStartupSupportabilities(agent) {
 
     if (enabled !== featureFlags[flag]) {
       agent.recordSupportability(
-        'FeatureFlag/' + flag + '/' + (enabled ? 'enabled' : 'disabled')
+        'Nodejs/FeatureFlag/' + flag + '/' + (enabled ? 'enabled' : 'disabled')
       )
     }
   }

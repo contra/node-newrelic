@@ -83,13 +83,8 @@ tap.test('external requests', function(t) {
       t.ok(external.timer.hasEnd(), 'should have ended')
       t.ok(external.children.length, 'should have children')
 
-      // TODO: Change this to a simple equal when deprecating Node v0.10
       var connect = external.children[0]
-      t.match(
-        connect.name,
-        /^(?:http\.Agent#createConnection|net\.Socket\.connect)$/,
-        'should be connect segment'
-      )
+      t.equal(connect.name, 'http.Agent#createConnection', 'should be connect segment')
       t.equal(connect.children.length, 1, 'connect should have 1 child')
 
       // There is potentially an extra layer of create/connect segments.
@@ -112,7 +107,7 @@ tap.test('external requests', function(t) {
     var https = require('https')
 
     helper.runInTransaction(agent, function inTransaction() {
-      https.get('https://encrypted.google.com/', function onResonse(res) {
+      https.get('https://encrypted.google.com:443/', function onResonse(res) {
         res.once('end', check)
         res.resume()
       })
@@ -124,7 +119,7 @@ tap.test('external requests', function(t) {
 
       t.equal(
         segment.name,
-        'External/encrypted.google.com/',
+        'External/encrypted.google.com:443/',
         'should be named'
       )
       t.ok(segment.timer.start, 'should have started')

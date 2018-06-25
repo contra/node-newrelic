@@ -16,15 +16,16 @@ function add_toolchain {
 }
 
 # Only upgrade GCC if we need to.
-if [ "$(get_gcc_version)" != "5" ]; then
-  echo " --- upgrading GCC --- "
-  add_toolchain
-  ./bin/travis-install-gcc5.sh > /dev/null
-else
-  echo " --- not upgrading GCC --- "
-fi
 
-if [ "$SUITE" = "integration" ] || [ "$SUITE" = "versioned" ]; then
+if [ "$SUITE" = "versioned" ]; then
+  if [ "$(get_gcc_version)" != "5" ]; then
+    echo " --- upgrading GCC --- "
+    add_toolchain
+    ./bin/travis-install-gcc5.sh > /dev/null
+  else
+    echo " --- not upgrading GCC --- "
+  fi
+
   echo " --- installing $SUITE requirements --- "
 
   # MongoDB is always installed in integrations and versioned.
@@ -39,7 +40,7 @@ fi
 
 if [ "$SUITE" = "security" ]; then
   echo " --- installing nsp  --- "
-  npm install nsp
+  npm install --no-save nsp
 fi
 
 # Always install time.

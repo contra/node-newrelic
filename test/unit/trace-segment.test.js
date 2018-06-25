@@ -27,7 +27,7 @@ describe('TraceSegment', function() {
     expect(function noTrace() {
       segment = new TraceSegment(null, 'UnitTest')
     }).to.throw()
-    expect(segment).to.be.null()
+    expect(segment).to.be.null
 
     var success = new TraceSegment(trans, 'UnitTest')
     expect(success.transaction).equal(trans)
@@ -37,7 +37,7 @@ describe('TraceSegment', function() {
   it('should not add new children when marked as opaque', function() {
     var trans = new Transaction(agent)
     var segment = new TraceSegment(trans, 'UnitTest')
-    expect(segment.opaque).to.be.false()
+    expect(segment.opaque).to.be.false
     segment.opaque = true
     segment.add('child')
     expect(segment.children.length).to.equal(0)
@@ -247,7 +247,7 @@ describe('TraceSegment', function() {
     })
 
     it('should have attributes on the trace', function() {
-      expect(trace.attributes.get(DESTINATIONS.TRANS_TRACE)).to.exist()
+      expect(trace.attributes.get(DESTINATIONS.TRANS_TRACE)).to.exist
     })
 
     it('should have the positional parameters from the params array', function() {
@@ -437,8 +437,7 @@ describe('TraceSegment', function() {
     })
 
     it('should not cause a stack overflow', function() {
-      // TODO: After deprecating Node <4 decrease this timeout to 30 seconds again.
-      this.timeout(60000)
+      this.timeout(30000)
       var parent = segment
       for (var i = 0; i < 9000; ++i) {
         var child = new TraceSegment(trans, 'Child ' + i)
